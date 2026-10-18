@@ -28,6 +28,21 @@ if (/去AI味（大纲再修后）/.test(pipeSrc)) {
 if (!/runGuardedAiHumanize/.test(pipeSrc)) {
   throw new Error('shared guarded humanize helper required')
 }
+if (!/enforceLayoutBeforeHumanize/.test(pipeSrc)) {
+  throw new Error('pre-humanize layout helper required')
+}
+{
+  const layoutSrc = readFileSync(
+    resolve(root, 'src/common/novel/novel-paragraph-format.ts'),
+    'utf8',
+  )
+  if (!/throwOnFail\s*=\s*opts\?\.throwOnFail\s*===\s*true/.test(layoutSrc)) {
+    throw new Error('enforceNovelProseDeliveryLayout must default to soft (opt-in throw only)')
+  }
+}
+if (!/runNovelChapterDegradedTail/.test(pipeSrc)) {
+  throw new Error('degraded path must still run humanize+review tail')
+}
 if (/deferPipeline/.test(pipeSrc)) {
   throw new Error('must not defer humanize after outline hardReject')
 }

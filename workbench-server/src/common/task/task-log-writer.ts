@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   formatSanitizedLogPreview,
   redactUrl,
@@ -16,9 +19,17 @@ const tone = {
   blue: '\x1b[34m',
 } as const
 
+/** 持久化任务日志，避免终端滚动冲掉 Novel 管线断点线索 */
+const TASK_LOG_FILE = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../logs/task.log',
+)
+
 export { redactUrl, sanitizeForLog }
 
 export class TaskLogWriter {
+  private fileReady = false
+
   private levelColor(level: LogLevel): string {
     switch (level) {
       case 'SUCCESS': return tone.green
@@ -30,6 +41,18 @@ export class TaskLogWriter {
 
   private timestamp(): string {
     return new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  }
+
+  private appendFile(line: string) {
+    try {
+      if (!this.fileReady) {
+        mkdirSync(dirname(TASK_LOG_FILE), { recursive: true })
+        this.fileReady = true
+      }
+      appendFileSync(TASK_LOG_FILE, `${line}\n`, 'utf8')
+    } catch {
+      /* 文件日志失败不影响主流程 */
+    }
   }
 
   private stringifyMeta(meta?: Record<string, unknown>): string {
@@ -55,9 +78,12 @@ export class TaskLogWriter {
 
   emit(scope: string, action: string, meta?: Record<string, unknown>, level: LogLevel = 'INFO') {
     const color = this.levelColor(level)
+    const ts = this.timestamp()
+    const metaStr = this.stringifyMeta(meta)
     console.log(
-      `${tone.dim}${this.timestamp()}${tone.reset} ${color}[${scope}]${tone.reset} ${action}${this.stringifyMeta(meta)}`,
+      `${tone.dim}${ts}${tone.reset} ${color}[${scope}]${tone.reset} ${action}${metaStr}`,
     )
+    this.appendFile(`${ts} [${level}] [${scope}] ${action}${metaStr}`)
   }
 
   emitPayload(scope: string, action: string, payload: unknown) {
@@ -65,7 +91,9 @@ export class TaskLogWriter {
     const serialized = typeof sanitized === 'string'
       ? sanitized
       : JSON.stringify(sanitized, null, 2)
-    console.log(`${tone.dim}${this.timestamp()}${tone.reset} ${tone.blue}[${scope}]${tone.reset} ${action}\n${serialized}`)
+    const ts = this.timestamp()
+    console.log(`${tone.dim}${ts}${tone.reset} ${tone.blue}[${scope}]${tone.reset} ${action}\n${serialized}`)
+    this.appendFile(`${ts} [INFO] [${scope}] ${action} ${serialized.slice(0, 2000)}`)
   }
 
   private applyClipping(value: unknown): unknown {

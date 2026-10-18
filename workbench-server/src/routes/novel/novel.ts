@@ -32,7 +32,12 @@ import { loadPrevChapterContentTail } from '../../services/novel/novel-continuit
 import { ensureAnchor, stripLeadingAnchorEcho } from '../../services/novel/novel-memory/index.js'
 import { streamChatCompletionWithPolish, sseResponse } from '../../common/http/sse-stream.js'
 import { batchGenerateNovelChapters } from '../../services/batch/batch-generation.js'
-import { runNovelChapterPipeline, postProcessNovelChapterContent, checkAndSaveChapterContinuity } from '../../services/novel/novel-chapter-pipeline.js'
+import {
+  runNovelChapterPipeline,
+  postProcessNovelChapterContent,
+  checkAndSaveChapterContinuity,
+  runNovelChapterDegradedTail,
+} from '../../services/novel/novel-chapter-pipeline.js'
 import { runChapterCraftContinueHook } from '../../services/novel/novel-chapter-craft-hook.js'
 import { isContinuityRewriteAbortError } from '../../services/novel/novel-continuity-errors.js'
 import {
@@ -1425,15 +1430,40 @@ app.post('/chapters/:id/generate/stream', async (c) => {
               billing,
             })
           }
+          // 降级仍补跑去AI味 + 审稿，避免正文落库却无检测/审稿
+          let ai_detection = null as Awaited<ReturnType<typeof runNovelChapterDegradedTail>>['ai_detection']
+          let chapter_review = null as Awaited<ReturnType<typeof runNovelChapterDegradedTail>>['chapter_review']
           try {
-            const epRow = await episodesRepo.findEpisodeById(id)
-            const cleared = mergeEpisodeMetadata(epRow?.metadata, { ai_detection: undefined })
-            await episodesRepo.updateEpisode(id, { metadata: cleared, updatedAt: now() })
-          } catch { /* ignore */ }
+            const tail = await runNovelChapterDegradedTail({
+              content: body,
+              dramaId: pack.drama.id,
+              episodeId: id,
+              chapterNumber,
+              dramaTitle: pack.drama.title,
+              meta,
+              chapterOutline,
+              billing,
+              onProgress: (status) => send({ phase: 'review', status }),
+            })
+            body = tail.content
+            ai_detection = tail.ai_detection
+            chapter_review = tail.chapter_review
+          } catch (tailErr: any) {
+            logTaskWarn('Novel', 'generate-stream-beat-sequential-degraded-tail-fail', {
+              chapterId: id,
+              error: tailErr?.message || String(tailErr),
+            })
+            try {
+              const epRow = await episodesRepo.findEpisodeById(id)
+              const cleared = mergeEpisodeMetadata(epRow?.metadata, { ai_detection: undefined })
+              await episodesRepo.updateEpisode(id, { metadata: cleared, updatedAt: now() })
+            } catch { /* ignore */ }
+          }
           send({
             content: body,
             continuity_check,
-            ai_detection: null,
+            ai_detection,
+            chapter_review,
             status: '完成（审校降级）',
             degraded: true,
           })
@@ -1583,20 +1613,45 @@ app.post('/chapters/:id/generate/stream', async (c) => {
             billing,
           })
         }
-        // 降级路径未跑完去AI味：清掉陈旧 ai_detection，避免 UI 一直显示上一轮「正文过短跳过」
+        let ai_detection = null as Awaited<ReturnType<typeof runNovelChapterDegradedTail>>['ai_detection']
+        let chapter_review = null as Awaited<ReturnType<typeof runNovelChapterDegradedTail>>['chapter_review']
         try {
-          const epRow = await episodesRepo.findEpisodeById(id)
-          const cleared = mergeEpisodeMetadata(epRow?.metadata, { ai_detection: undefined })
-          await episodesRepo.updateEpisode(id, { metadata: cleared, updatedAt: now() })
-        } catch { /* ignore */ }
+          const tail = await runNovelChapterDegradedTail({
+            content: body,
+            dramaId: pack.drama.id,
+            episodeId: id,
+            chapterNumber,
+            dramaTitle: pack.drama.title,
+            meta,
+            chapterOutline,
+            billing,
+            onProgress: (status) => notify?.({ phase: 'review', status }),
+          })
+          body = tail.content
+          ai_detection = tail.ai_detection
+          chapter_review = tail.chapter_review
+        } catch (tailErr: any) {
+          logTaskWarn('Novel', 'generate-stream-post-process-degraded-tail-fail', {
+            chapterId: id,
+            error: tailErr?.message || String(tailErr),
+          })
+          try {
+            const epRow = await episodesRepo.findEpisodeById(id)
+            const cleared = mergeEpisodeMetadata(epRow?.metadata, { ai_detection: undefined })
+            await episodesRepo.updateEpisode(id, { metadata: cleared, updatedAt: now() })
+          } catch { /* ignore */ }
+        }
         logTaskWarn('Novel', 'generate-stream-post-process-degraded', {
           chapterId: id,
           chars: [...body].length,
+          hasAiDetection: !!ai_detection,
+          hasReview: !!chapter_review,
         })
         return {
           content: body,
           continuity_check,
-          ai_detection: null,
+          ai_detection,
+          chapter_review,
           degraded: true,
         }
       }

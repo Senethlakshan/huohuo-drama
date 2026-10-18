@@ -194,6 +194,7 @@ function splitWallIntoParagraphs(text: string): string[] {
     const openDepth = quoteOpenDepth(bucket.join(''))
     // 正常：引号未闭合不换段；硬上限：丢收引号也必须换段，避免文字墙
     const canFlush = openDepth === 0 || bucketChars >= HARD_FLUSH_CHARS
+    // 极短句可暂缓换段并入下一长句；句数硬顶由 enforceMaxSentencesPerParagraph 兜底
     if (preferFlush && !isUltraShortFragment(sent) && canFlush) {
       flush()
     }
@@ -254,7 +255,22 @@ export function varyNovelParagraphRhythm(text: string): string {
 }
 
 /**
- * 任一叙述段超过 max 句则按句重切（对话/拟声可 1 句成段，仍受 max 约束）。
+ * 超 max 句的段：按句切开，每段最多 max 句（4 句 → 前 3 + 最后 1）。
+ * 不走节奏/极短暂缓逻辑——那是拆墙用的；交付合同只需句数硬顶。
+ */
+function chunkBlockByMaxSentences(block: string, maxSentences: number): string[] {
+  const sentences = splitSentences(block)
+  if (sentences.length <= maxSentences) return [block.trim()].filter(Boolean)
+  const out: string[] = []
+  for (let i = 0; i < sentences.length; i += maxSentences) {
+    const chunk = sentences.slice(i, i + maxSentences).join('').trim()
+    if (chunk) out.push(chunk)
+  }
+  return out
+}
+
+/**
+ * 任一叙述段超过 max 句则按句硬切（对话/拟声可 1 句成段，仍受 max 约束）。
  */
 export function enforceMaxSentencesPerParagraph(
   text: string,
@@ -269,7 +285,7 @@ export function enforceMaxSentencesPerParagraph(
       out.push(block)
       continue
     }
-    out.push(...splitWallIntoParagraphs(block))
+    out.push(...chunkBlockByMaxSentences(block, maxSentences))
   }
   return repairNovelQuoteParagraphs(mergeOrphanShortParagraphs(out.join('\n\n')))
 }
@@ -434,6 +450,8 @@ export function repairNovelQuoteParagraphs(text: string): string {
 
 /**
  * 极短独占段并入下一段（按长度/结构，不按具体词）。
+ * 合并后不得破坏交付合同（≤3 句/段、≤420 字），否则宁可不并——
+ * 否则会出现「刚按句数拆完，又被并回 4 句墙，合同永远不过」的死循环（第22章）。
  */
 export function mergeOrphanShortParagraphs(text: string): string {
   const blocks = paragraphBlocks(repairNovelQuoteParagraphs(text))
@@ -446,9 +464,14 @@ export function mergeOrphanShortParagraphs(text: string): string {
     const cur = blocks[i]!
     const next = blocks[i + 1]
     if (next && isOrphanShortBeat(cur)) {
-      merged.push(cur + next)
-      i += 1
-      continue
+      const combined = cur + next
+      const okSentences = sentenceCountInBlock(combined) <= MAX_SENTENCES_PER_PARAGRAPH
+      const okChars = combined.length <= DELIVERY_MAX_PARAGRAPH_CHARS
+      if (okSentences && okChars) {
+        merged.push(combined)
+        i += 1
+        continue
+      }
     }
     merged.push(cur)
   }
@@ -538,9 +561,10 @@ export function assertNovelProseLayoutContract(text: string): NovelProseLayoutCo
   }
   const blocks = paragraphBlocks(trimmed)
   const maxLen = blocks.length ? Math.max(...blocks.map(b => b.length)) : 0
-  // 只拦句数墙/超长段；勿把「短段较多」当成墙（字数硬切后常见）
-  if (blocks.some(b => sentenceCountInBlock(b) > MAX_SENTENCES_PER_PARAGRAPH) || maxLen > DELIVERY_MAX_PARAGRAPH_CHARS) {
-    reasons.push('存在超长段或单段墙，须短段空行')
+  const overSent = blocks.filter(b => sentenceCountInBlock(b) > MAX_SENTENCES_PER_PARAGRAPH)
+  // 句数墙与字数墙分开报，避免「其实是 4 句并段」被误诊成超长段
+  if (overSent.length) {
+    reasons.push(`存在超句数段（>${MAX_SENTENCES_PER_PARAGRAPH}句，共${overSent.length}段）`)
   }
   if (maxLen > DELIVERY_MAX_PARAGRAPH_CHARS) {
     reasons.push(`单段过长（${maxLen}>${DELIVERY_MAX_PARAGRAPH_CHARS}）`)
@@ -564,10 +588,14 @@ export class NovelProseLayoutError extends Error {
 
 /**
  * 交付口强制排版（方案 B）：
- * 1) 修未闭合引号 2) 强制自然短段 3) 再验合同；仍失败则抛错，禁止落库文字墙。
+ * 1) 修未闭合引号 2) 强制自然短段 3) 再验合同。
+ *
+ * 默认软修复、不抛错。硬抛会被流式 `post-degraded` 吞掉，反而落未修的拼稿并跳过
+ * 去AI味/审稿（见第22章密匣夜盗）；润色路径本就 throwOnFail:false。
+ * 仅测试或显式闸门可传 `{ throwOnFail: true }`。
  */
 export function enforceNovelProseDeliveryLayout(text: string, opts?: { throwOnFail?: boolean }): string {
-  const throwOnFail = opts?.throwOnFail !== false
+  const throwOnFail = opts?.throwOnFail === true
   let out = (text || '').replace(/\r\n/g, '\n').trim()
   if (!out) return out
 

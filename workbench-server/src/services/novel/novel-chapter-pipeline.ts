@@ -77,7 +77,10 @@ function buildHardRejectContinuityCheck(
 
 import { generateNovelChapterFull } from './novel-writing.js'
 import { normalizeNovelTemporalNumerals } from '../../common/novel/novel-temporal-numerals.js'
-import { enforceNovelProseDeliveryLayout } from '../../common/novel/novel-paragraph-format.js'
+import {
+  assertNovelProseLayoutContract,
+  enforceNovelProseDeliveryLayout,
+} from '../../common/novel/novel-paragraph-format.js'
 import {
   ContinuityRewriteAbortError,
   type ContinuityAbortReason,
@@ -93,6 +96,76 @@ import { runNovelChapterAiHumanizeHook } from './novel-chapter-ai-humanize-hook.
 import { loadPrevChapterContentTail } from './novel-continuity.js'
 import { detectChapterSeamColdOpen } from './novel-chapter-seam.js'
 import type { EpisodeAiDetection } from '../../common/drama/episode-meta.js'
+
+/** 去AI味前排版（默认软修复）；合同仍不过只打日志，不打断末两环。 */
+function enforceLayoutBeforeHumanize(content: string, chapterNumber: number): string {
+  const out = enforceNovelProseDeliveryLayout(content)
+  const gate = assertNovelProseLayoutContract(out)
+  if (!gate.ok) {
+    logTaskWarn('Novel', 'layout-soft-fail-before-humanize', {
+      chapterNumber,
+      reasons: gate.reasons.slice(0, 4),
+    })
+  }
+  return out
+}
+
+/**
+ * 流式后处理降级后仍须跑末两环：去AI味检测 + 平台审稿。
+ * 避免「审校中途抛错 → 正文落库但无 AI 检测/审稿」。
+ */
+export async function runNovelChapterDegradedTail(args: {
+  content: string
+  dramaId: number
+  episodeId: number
+  chapterNumber: number
+  dramaTitle: string
+  meta: NovelMetadata
+  chapterOutline?: string
+  billing?: TextBillingContext
+  onProgress?: (status: string) => void
+}): Promise<{
+  content: string
+  ai_detection: EpisodeAiDetection | null
+  chapter_review: import('./novel-chapter-review.js').ChapterReviewResult | null
+}> {
+  const {
+    dramaId, episodeId, chapterNumber, dramaTitle, meta, chapterOutline, billing, onProgress,
+  } = args
+  let content = enforceLayoutBeforeHumanize(args.content, chapterNumber)
+  const prevTail = chapterNumber >= 2
+    ? await loadPrevChapterContentTail(dramaId, chapterNumber, 1600)
+    : ''
+  const humanizeOut = await runGuardedAiHumanize({
+    content,
+    episodeId,
+    chapterNumber,
+    meta,
+    billing,
+    onProgress,
+    prevTail,
+    chapterOutline,
+  })
+  content = humanizeOut.content
+  let chapterReview: import('./novel-chapter-review.js').ChapterReviewResult | null = null
+  if (content.trim()) {
+    onProgress?.('平台审稿中…')
+    chapterReview = await runChapterReviewPipelineHook({
+      content,
+      episodeId,
+      chapterNumber,
+      dramaTitle,
+      meta,
+      chapterOutline,
+      billing: billing ? { ...billing, reason: '小说章节平台审稿（降级补跑）' } : undefined,
+    })
+  }
+  return {
+    content,
+    ai_detection: humanizeOut.ai_detection,
+    chapter_review: chapterReview,
+  }
+}
 
 /**
  * 去AI味（含章缝防护回退）。管线末环之一：须在大纲合规 + 一致性通过之后、平台审稿之前调用。
@@ -637,11 +710,11 @@ export async function postProcessNovelChapterContent(args: {
     })
     content = repaired.content
   }
-  content = normalizeNovelTemporalNumerals(enforceNovelProseDeliveryLayout(content))
+  content = normalizeNovelTemporalNumerals(enforceLayoutBeforeHumanize(content, chapterNumber))
   {
     const { stripIntraChapterNearDuplicate } = await import('./novel-intra-chapter-dedupe.js')
     content = stripIntraChapterNearDuplicate(content).text
-    content = enforceNovelProseDeliveryLayout(content)
+    content = enforceLayoutBeforeHumanize(content, chapterNumber)
   }
   {
     const target = Math.min(20000, Math.max(500, Number(generateArgs?.targetLength) || 3000))
@@ -1224,11 +1297,11 @@ export async function runNovelChapterPipeline(args: {
       })
       content = repaired.content
     }
-    content = normalizeNovelTemporalNumerals(enforceNovelProseDeliveryLayout(content))
+    content = normalizeNovelTemporalNumerals(enforceLayoutBeforeHumanize(content, chapterNumber))
     {
       const { stripIntraChapterNearDuplicate } = await import('./novel-intra-chapter-dedupe.js')
       content = stripIntraChapterNearDuplicate(content).text
-      content = enforceNovelProseDeliveryLayout(content)
+      content = enforceLayoutBeforeHumanize(content, chapterNumber)
     }
     const target = Math.min(20000, Math.max(500, Number(generateArgs?.targetLength) || 3000))
     const minLen = Math.round(target * 0.88)
