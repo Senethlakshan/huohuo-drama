@@ -20,14 +20,27 @@ function resolveLine(
   return entry?.injectPrompt
 }
 
+function splitCultivationCustomLines(text: string): string[] {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
 function resolveCultivationBlock(meta: NovelMetadataPatch): string | undefined {
   const catalogParts: Array<{ label: string; text: string }> = []
+  const detailChains = new Set<string>()
   for (const id of resolveCultivationIds(meta)) {
     const entry = findActiveCatalogEntry(NOVEL_CULTIVATION_CATALOG, id)
     if (!entry) continue
     catalogParts.push({ label: entry.label, text: entry.injectPrompt })
+    const chain = (entry.detailChain || '').trim()
+    if (chain) detailChains.add(chain)
   }
-  const custom = (meta.cultivation_custom || '').trim()
+  const customLines = splitCultivationCustomLines(meta.cultivation_custom || '')
+    .filter(line => !detailChains.has(line))
+  const custom = customLines.join('\n')
   if (!catalogParts.length && !custom) return undefined
   if (catalogParts.length === 1 && !custom) return catalogParts[0].text
   if (!catalogParts.length && custom) return custom

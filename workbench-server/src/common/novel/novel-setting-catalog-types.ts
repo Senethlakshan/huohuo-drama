@@ -8,6 +8,8 @@ export type NovelSettingCatalogEntry = {
   genreSkillKeys: string[]
   injectPrompt: string
   status: 'active' | 'planned' | 'deprecated'
+  /** 选中时填入自定义框的完整境界链（可选）；无则不改自定义框 */
+  detailChain?: string
 }
 
 export function filterCatalogByGenre(

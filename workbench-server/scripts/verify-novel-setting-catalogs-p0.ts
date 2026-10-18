@@ -69,6 +69,33 @@ assert(injectMulti.includes('斗气'), 'multi includes douqi')
 assert(injectMulti.includes('体质'), 'multi includes physique')
 assert(injectMulti.includes('炼药'), 'multi includes alchemy')
 
+const eastern = cuActive.find(e => e.id === 'cu_eastern_xuanwu')
+assert(eastern?.detailChain, 'cu_eastern_xuanwu detailChain')
+const lean = cuActive.find(e => e.id === 'cu_lean_realm_ten')
+assert(lean?.detailChain, 'cu_lean_realm_ten detailChain')
+
+const injectEasternMirror = buildNovelSettingInjectBlock({
+  novel_genre: '玄幻文',
+  novel_genre_skill_key: 'xuanhuan',
+  worldview_id: 'wv_generic_fantasy',
+  golden_finger_id: 'gf_checkin',
+  cultivation_ids: ['cu_eastern_xuanwu'],
+  cultivation_custom: eastern!.detailChain,
+})
+assert(injectEasternMirror.includes('东方古武玄境'), 'eastern injectPrompt present')
+assert(!injectEasternMirror.includes('自定义：'), 'eastern detailChain mirror must not append 自定义')
+
+const injectLeanMirror = buildNovelSettingInjectBlock({
+  novel_genre: '玄幻文',
+  novel_genre_skill_key: 'xuanhuan',
+  worldview_id: 'wv_generic_fantasy',
+  golden_finger_id: 'gf_checkin',
+  cultivation_ids: ['cu_lean_realm_ten'],
+  cultivation_custom: lean!.detailChain,
+})
+assert(injectLeanMirror.includes('精简十境'), 'lean injectPrompt present')
+assert(!injectLeanMirror.includes('自定义：'), 'lean detailChain mirror must not append 自定义')
+
 assert(
   validateNovelIdeationSettings({
     novel_genre_skill_key: 'xianxia',

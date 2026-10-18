@@ -478,20 +478,53 @@ function pickWorldview(id) {
 
 const CULTIVATION_PICK_MAX = 8
 
+function splitCultivationCustomLines(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
+function joinCultivationCustomLines(lines) {
+  return lines.join('\n')
+}
+
+function syncCultivationDetailChain(id, mode) {
+  const entry = listCultivations().find(e => e.id === id)
+  const chain = String(entry?.detailChain || '').trim()
+  if (!chain) return
+  const lines = splitCultivationCustomLines(cultivationCustom.value)
+  if (mode === 'add') {
+    if (!lines.includes(chain)) lines.push(chain)
+    cultivationCustom.value = joinCultivationCustomLines(lines)
+    return
+  }
+  cultivationCustom.value = joinCultivationCustomLines(lines.filter(l => l !== chain))
+}
+
+function selectCultivationId(id) {
+  const cur = [...cultivationIds.value]
+  if (cur.includes(id)) return true
+  if (cur.length >= CULTIVATION_PICK_MAX) {
+    toast.info(tm.value.ideate.cultivationMaxHint)
+    return false
+  }
+  cur.push(id)
+  cultivationIds.value = cur
+  syncCultivationDetailChain(id, 'add')
+  return true
+}
+
+function deselectCultivationId(id) {
+  cultivationIds.value = cultivationIds.value.filter(x => x !== id)
+  syncCultivationDetailChain(id, 'remove')
+}
+
 function toggleCultivation(id) {
   markDirty('cultivation')
-  const cur = [...cultivationIds.value]
-  const idx = cur.indexOf(id)
-  if (idx >= 0) {
-    cur.splice(idx, 1)
-  } else {
-    if (cur.length >= CULTIVATION_PICK_MAX) {
-      toast.info(tm.value.ideate.cultivationMaxHint)
-      return
-    }
-    cur.push(id)
-  }
-  cultivationIds.value = cur
+  if (cultivationIds.value.includes(id)) deselectCultivationId(id)
+  else selectCultivationId(id)
 }
 
 function pickGoldenFinger(id) {
@@ -620,7 +653,7 @@ async function applyHotItem(item) {
       if (mapped.cultivationId && !isDirty('cultivation')) {
         if (listCultivations().some(e => e.id === mapped.cultivationId)) {
           if (!cultivationIds.value.includes(mapped.cultivationId)) {
-            cultivationIds.value = [...cultivationIds.value, mapped.cultivationId].slice(0, CULTIVATION_PICK_MAX)
+            selectCultivationId(mapped.cultivationId)
           }
         }
       }
