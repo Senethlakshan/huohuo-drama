@@ -1,7 +1,7 @@
 /**
- * 全书大纲【主要人物】稳定属性（年龄等）
- * - 生成侧：**按需**注入（本章涉及年龄/登记等才注入）
- * - 审核侧：对照大纲硬检（不依赖生成注入）
+ * 全书大纲【主要人物】稳定属性（性别/代词/年龄等）
+ * - 性别·代词：生成侧**常驻**注入（有则注入）；审核侧硬检跨章代词翻转
+ * - 年龄：生成侧**按需**注入（本章涉及年龄/登记等才注入）；审核侧对照大纲硬检
  */
 
 export type StableCastFact = {
@@ -9,12 +9,22 @@ export type StableCastFact = {
   ageYears?: number
   /** 原文年龄片段，如「19岁」「十九岁」 */
   ageRaw?: string
+  /** 男 / 女 / 其它（大纲原文归一） */
+  gender?: 'male' | 'female' | 'other'
+  /** 叙述代词：他 / 她 / 它 */
+  pronoun?: '他' | '她' | '它'
   blurb?: string
 }
 
 export type StableAgeConflict = {
   layer: 'hard'
   rule: 'stable_age_conflict'
+  message: string
+}
+
+export type StableGenderConflict = {
+  layer: 'hard'
+  rule: 'stable_gender_conflict'
   message: string
 }
 
@@ -67,7 +77,7 @@ function extractCastSection(outline: string): string {
     }
   }
   if (start < 0) {
-    // 行内：- **苏婉**：…19岁
+    // 行内：- **姓名**：…19岁
     return t
   }
   const rest = t.slice(start)
@@ -75,9 +85,60 @@ function extractCastSection(outline: string): string {
   return end >= 0 ? rest.slice(0, end) : rest.slice(0, 4000)
 }
 
+/** 从称谓行解析性别与代词（题材无关） */
+export function parseGenderPronounFromBlurb(blurb: string): {
+  gender?: StableCastFact['gender']
+  pronoun?: StableCastFact['pronoun']
+} {
+  const raw = (blurb || '').trim()
+  if (!raw) return {}
+  const parts = raw.split(/[|｜]/).map(s => s.trim()).filter(Boolean)
+  let gender: StableCastFact['gender'] | undefined
+  let pronoun: StableCastFact['pronoun'] | undefined
+
+  for (const p of parts) {
+    if (/^(他|她|它)$/.test(p)) {
+      pronoun = p as StableCastFact['pronoun']
+      continue
+    }
+    if (/^(男|男性|男子)$/.test(p)) {
+      gender = 'male'
+      continue
+    }
+    if (/^(女|女性|女子)$/.test(p)) {
+      gender = 'female'
+      continue
+    }
+  }
+
+  // 非竖线：句首/逗号后的「男/女」或「男主/女主」
+  if (!gender) {
+    if (/(?:^|[，,、：:])\s*男(?:性|子|主)?(?:[，,、｜|]|$)/.test(raw) || /^男(?:性|子)?[，,、]/.test(raw)) {
+      gender = 'male'
+    } else if (/(?:^|[，,、：:])\s*女(?:性|子|主)?(?:[，,、｜|]|$)/.test(raw) || /^女(?:性|子)?[，,、]/.test(raw)) {
+      gender = 'female'
+    } else if (/男主/.test(raw) && !/女主/.test(raw)) {
+      gender = 'male'
+    } else if (/女主/.test(raw)) {
+      gender = 'female'
+    }
+  }
+  if (!pronoun) {
+    if (gender === 'male') pronoun = '他'
+    else if (gender === 'female') pronoun = '她'
+  }
+  return { gender, pronoun }
+}
+
+function genderLabel(g: StableCastFact['gender']): string {
+  if (g === 'male') return '男'
+  if (g === 'female') return '女'
+  return '其它'
+}
+
 /**
- * 从全书大纲抽取稳定人设（至少含年龄）。
- * 识别：`- **苏婉**：女主，19岁…` / `苏婉｜…｜19岁`
+ * 从全书大纲抽取稳定人设（性别/代词/年龄）。
+ * 识别：`姓名｜男｜他｜…` / `- **姓名**：女主，19岁…`
  */
 export function extractStableCastFactsFromOutline(outline: string): StableCastFact[] {
   const section = extractCastSection(outline)
@@ -86,37 +147,48 @@ export function extractStableCastFactsFromOutline(outline: string): StableCastFa
   const facts: StableCastFact[] = []
   const seen = new Set<string>()
 
-  const lineRe =
-    /(?:^|\n)\s*[-*•]?\s*\*{0,2}([^\s*：:\|｜，,]{2,6})\*{0,2}\s*[：:|｜]\s*([^\n]{4,200})/g
-  let m: RegExpExecArray | null
-  while ((m = lineRe.exec(hay))) {
-    const name = m[1]!.replace(/[*【】\[\]]/g, '').trim()
-    const blurb = m[2]!.trim()
-    if (name.length < 2 || name.length > 6) continue
-    if (/^(男主|女主|配角|反派|主要人物|人物核心)$/.test(name)) continue
+  const pushFact = (name: string, blurb: string) => {
+    if (name.length < 2 || name.length > 6) return
+    if (/^(男主|女主|配角|反派|主要人物|人物核心|性别|代词)$/.test(name)) return
     const ageM = blurb.match(/(\d{1,2}|[一二三四五六七八九十两零〇]{1,3})\s*岁/)
-    if (!ageM) continue
-    const ageYears = parseAgeToken(ageM[1]!)
-    if (ageYears == null) continue
-    if (seen.has(name)) continue
+    const ageYears = ageM ? parseAgeToken(ageM[1]!) : null
+    const { gender, pronoun } = parseGenderPronounFromBlurb(blurb)
+    if (ageYears == null && !gender && !pronoun) return
+    if (seen.has(name)) {
+      // 合并补全
+      const prev = facts.find(f => f.name === name)
+      if (prev) {
+        if (prev.ageYears == null && ageYears != null) {
+          prev.ageYears = ageYears
+          prev.ageRaw = ageM?.[0]
+        }
+        if (!prev.gender && gender) prev.gender = gender
+        if (!prev.pronoun && pronoun) prev.pronoun = pronoun
+      }
+      return
+    }
     seen.add(name)
     facts.push({
       name,
-      ageYears,
-      ageRaw: ageM[0],
+      ...(ageYears != null ? { ageYears, ageRaw: ageM![0] } : {}),
+      ...(gender ? { gender } : {}),
+      ...(pronoun ? { pronoun } : {}),
       blurb: blurb.slice(0, 80),
     })
   }
 
-  // 兜底：全文扫「**姓名**：…N岁」
+  const lineRe =
+    /(?:^|\n)\s*[-*•]?\s*\*{0,2}([^\s*：:\|｜，,]{2,6})\*{0,2}\s*[：:|｜]\s*([^\n]{2,200})/g
+  let m: RegExpExecArray | null
+  while ((m = lineRe.exec(hay))) {
+    pushFact(m[1]!.replace(/[*【】\[\]]/g, '').trim(), m[2]!.trim())
+  }
+
+  // 兜底：全文扫「**姓名**：…」
   if (!facts.length && outline) {
-    const boldRe = /\*\*([^*]{2,6})\*\*\s*[：:]\s*([^\n]{0,120}?(\d{1,2}|[一二三四五六七八九十两零〇]{1,3})\s*岁)/g
+    const boldRe = /\*\*([^*]{2,6})\*\*\s*[：:]\s*([^\n]{2,160})/g
     while ((m = boldRe.exec(outline))) {
-      const name = m[1]!.trim()
-      const ageYears = parseAgeToken(m[3]!)
-      if (ageYears == null || seen.has(name)) continue
-      seen.add(name)
-      facts.push({ name, ageYears, ageRaw: `${ageYears}岁`, blurb: m[2]!.slice(0, 80) })
+      pushFact(m[1]!.trim(), m[2]!.trim())
     }
   }
   return facts
@@ -126,19 +198,44 @@ export function formatStableCastFactsInjectBlock(facts: StableCastFact[]): strin
   if (!facts.length) return ''
   const lines = facts.map((f) => {
     const bits = [f.name]
+    if (f.gender) bits.push(genderLabel(f.gender))
+    if (f.pronoun) bits.push(f.pronoun)
     if (f.ageYears != null) bits.push(`${f.ageYears}岁`)
-    if (f.blurb) bits.push(f.blurb.slice(0, 48))
+    if (f.blurb) {
+      // 去掉与结构化字段重复的「男｜他｜」前缀，避免「男｜他｜男｜他」
+      let trimmed = f.blurb.trim()
+      for (let i = 0; i < 4; i++) {
+        const next = trimmed.replace(/^(?:男|女|男性|女性|他|她|它)(?:｜|,|，)/u, '')
+        if (next === trimmed) break
+        trimmed = next
+      }
+      trimmed = trimmed.slice(0, 40)
+      if (trimmed && trimmed !== f.name) bits.push(trimmed)
+    }
     return `- ${bits.join('｜')}`
   })
+  const hasGender = facts.some(f => f.gender || f.pronoun)
+  const hasAge = facts.some(f => f.ageYears != null)
+  const hardBits = [
+    hasGender ? '叙述代词须与上表一致，禁止无交代他↔她翻转' : '',
+    hasAge ? '本章若写「几岁/多大/年龄」须与上表一致，禁止无交代改年龄' : '',
+  ].filter(Boolean)
   return [
-    '【稳定人设·大纲判定本章需要（禁止无交代改年龄）】',
+    '【稳定人设·大纲锁定（禁止无交代改性别/代词/年龄）】',
     ...lines,
-    '硬性：本章若写「几岁/多大/年龄」对白或旁白，须与上表一致；禁止无交代改年龄。',
-  ].join('\n')
+    hardBits.length ? `硬性：${hardBits.join('；')}。` : '',
+  ].filter(Boolean).join('\n')
+}
+
+/** 仅性别/代词注入块（常驻；与年龄按需注入可合并） */
+export function formatStableGenderInjectBlock(facts: StableCastFact[]): string {
+  const withG = facts.filter(f => f.gender || f.pronoun)
+  if (!withG.length) return ''
+  return formatStableCastFactsInjectBlock(withG)
 }
 
 /** 本章大纲/说明判定需要的稳定字段（无需要则不注入） */
-export type NeededStableDim = 'age' | 'identity'
+export type NeededStableDim = 'age' | 'identity' | 'gender'
 
 /**
  * 根据本章大纲/写作说明动态判断需要注入哪些稳定维。
@@ -186,25 +283,45 @@ export function shouldInjectStableCastFacts(...signals: Array<string | undefined
 
 /**
  * 选取本章应注入的稳定人设：
- * 1) 本章大纲判定需要的维（无需要 → 空）——动态在「是否注入」
- * 2) 年龄/身份维：注入大纲【主要人物】中全部已写年龄者
- *    （盘查戏家眷常未写入【本章人物】行；人数通常极少，不是项目全角色表）
+ * 1) 性别/代词：有则常驻（不依赖本章是否盘查）
+ * 2) 年龄/身份：仅当本章大纲判定需要时，附带已写年龄者
  */
 export function selectStableCastFactsForInject(
   outline: string,
   ...signals: Array<string | undefined | null>
 ): StableCastFact[] {
-  const needed = detectNeededStableDimsFromChapterOutline(...signals)
-  if (!needed.size) return []
   const facts = extractStableCastFactsFromOutline(outline)
   if (!facts.length) return []
-  if (needed.has('age') || needed.has('identity')) {
-    return facts.filter(f => f.ageYears != null)
+  const needed = detectNeededStableDimsFromChapterOutline(...signals)
+  const byName = new Map<string, StableCastFact>()
+
+  for (const f of facts) {
+    if (!(f.gender || f.pronoun)) continue
+    // 性别常驻：先不带年龄，避免无盘查戏误注入岁数
+    byName.set(f.name, {
+      name: f.name,
+      gender: f.gender,
+      pronoun: f.pronoun,
+      blurb: f.blurb,
+    })
   }
-  return []
+  if (needed.has('age') || needed.has('identity')) {
+    for (const f of facts) {
+      if (f.ageYears == null) continue
+      const prev = byName.get(f.name)
+      if (prev) {
+        prev.ageYears = f.ageYears
+        prev.ageRaw = f.ageRaw
+        if (!prev.blurb && f.blurb) prev.blurb = f.blurb
+      } else {
+        byName.set(f.name, { ...f })
+      }
+    }
+  }
+  return [...byName.values()]
 }
 
-/** 按需注入块；大纲判定不需要则空串 */
+/** 性别常驻 + 年龄按需；皆无则空串 */
 export function maybeFormatStableCastFactsInjectBlock(
   outline: string,
   ...signals: Array<string | undefined | null>
@@ -331,4 +448,41 @@ function nearestCastNameBefore(pre: string, facts: StableCastFact[]): string | n
     if (!best || at > best.at) best = { name: f.name, at }
   }
   return best?.name ?? null
+}
+
+/**
+ * 正文代词与大纲性别锁冲突 → hard
+ * 高置信：姓名后短窗内以错误代词作主语（她没/他说/他抬…）
+ */
+export function detectStableGenderConflicts(
+  content: string,
+  facts: StableCastFact[],
+): StableGenderConflict[] {
+  const locked = facts.filter(f => f.pronoun === '他' || f.pronoun === '她')
+  if (!locked.length || !content.trim()) return []
+  const hay = compactProse(content)
+  const out: StableGenderConflict[] = []
+  const verb = '没|不|说|看|抬|走|盯|笑|冷|问|答|点|挥|按|拍|踏|站|坐|转身|倒转|负手|伸|递|扔|甩|喝|骂|嗤'
+
+  for (const f of locked) {
+    if (!hay.includes(f.name)) continue
+    const wrong = f.pronoun === '他' ? '她' : '他'
+    const re = new RegExp(`${f.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.{0,36}${wrong}(?:${verb})`)
+    const m = hay.match(re)
+    if (!m) continue
+    out.push({
+      layer: 'hard',
+      rule: 'stable_gender_conflict',
+      message:
+        `稳定人设性别/代词冲突：「${f.name}」大纲代词为「${f.pronoun}」，正文出现「${wrong}」主语翻转。`
+        + `摘录「${m[0].slice(0, 36)}」`,
+    })
+  }
+
+  const seen = new Set<string>()
+  return out.filter((x) => {
+    if (seen.has(x.message)) return false
+    seen.add(x.message)
+    return true
+  })
 }

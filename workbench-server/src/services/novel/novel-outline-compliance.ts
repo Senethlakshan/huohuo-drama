@@ -1,8 +1,8 @@
 /**
  * 大纲/写作说明落实（题材无关）：
- * 规则只做机械项：拍点覆盖、末拍越界、下章泄漏、旧稿孤儿回灌等。
- * 章缝叙事/因果自洽（时辰、倒叙、先果后因、离场重开等）不走规则，见模型审
- * `auditOutlineBoundaryWithModel`（outline-compliance-fix 内合并）。
+ * 规则只做机械项：拍点覆盖、末拍越界、下章泄漏、旧稿孤儿回灌、信息增量字面预筛等。
+ * 章缝叙事/因果自洽见 `auditOutlineBoundaryWithModel`；
+ * 【信息增量】终审见 `auditInfoDeltaWithModel`（outline-compliance-fix 内合并）。
  */
 import {
   detectForwardSeamCopyLexical,

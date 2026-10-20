@@ -348,15 +348,13 @@ export async function buildNovelWriteContext(args: {
   const characterBlock = await buildProjectCharacterRosterBlock(dramaId)
 
   const { maybeFormatStableCastFactsInjectBlock } = await import('./novel-stable-cast-facts.js')
-  // 按需注入：第1章已有全书大纲；其后仅当本章 brief/检索触及年龄·登记等
-  const stableCastFactsBlock = chapterNumber === 1
-    ? ''
-    : maybeFormatStableCastFactsInjectBlock(
-      bookOutline || meta.outline || '',
-      writingBrief,
-      retrievalQuery,
-      chapterOutline,
-    )
+  // 性别/代词常驻注入；年龄仍按需（盘查/报岁等）。第1章也注入性别锁，避免开篇代词漂。
+  const stableCastFactsBlock = maybeFormatStableCastFactsInjectBlock(
+    bookOutline || meta.outline || '',
+    writingBrief,
+    retrievalQuery,
+    chapterOutline,
+  )
 
   let memoryBlock = ''
   if (meta.long_memory_enabled !== false) {

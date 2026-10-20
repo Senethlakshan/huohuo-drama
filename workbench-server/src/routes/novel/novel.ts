@@ -574,9 +574,8 @@ app.post('/chapters/:id/continuity/check', async (c) => {
   const { text: chapterOutline } = resolveChapterOutline(pack)
   const meta = parseNovelMetadata(pack.drama.metadata)
 
-  logTaskStart('Novel', 'continuity-check', { chapterId: id })
   try {
-    // 与流式降级审校共用：先补【变更记录】再审
+    // 与流式降级审校共用：先补【变更记录】再审；START/DONE 在 checkNovelChapterContinuity 内统一打
     const check = await checkAndSaveChapterContinuity({
       content: prose,
       dramaId: pack.drama.id,
@@ -587,7 +586,6 @@ app.post('/chapters/:id/continuity/check', async (c) => {
       chapterOutline,
       billing: novelTextBilling(user, '小说一致性审校', id),
     })
-    logTaskSuccess('Novel', 'continuity-check', { chapterId: id, score: check.score, passed: check.passed })
     return success(c, check)
   } catch (err: any) {
     logTaskError('Novel', 'continuity-check', { chapterId: id, error: err?.message })
@@ -1384,6 +1382,14 @@ app.post('/chapters/:id/generate/stream', async (c) => {
             onProgress: (status) => send({ phase: 'review', status }),
           })
           const hardReject = post.hard_reject === true || post.outline_compliance?.hardReject === true
+          logTaskSuccess('Novel', 'generate-chapter-stream', {
+            chapterId: id,
+            len: hardReject ? 0 : post.content.length,
+            checkScore: post.check?.score,
+            checkPassed: post.check?.passed,
+            hardReject,
+            mode: 'beat_sequential',
+          })
           send({
             content: hardReject ? '' : post.content,
             continuity_check: post.check,
@@ -1459,6 +1465,14 @@ app.post('/chapters/:id/generate/stream', async (c) => {
               await episodesRepo.updateEpisode(id, { metadata: cleared, updatedAt: now() })
             } catch { /* ignore */ }
           }
+          logTaskSuccess('Novel', 'generate-chapter-stream', {
+            chapterId: id,
+            len: body.length,
+            checkScore: continuity_check?.score,
+            checkPassed: continuity_check?.passed,
+            degraded: true,
+            mode: 'beat_sequential',
+          })
           send({
             content: body,
             continuity_check,
@@ -1566,9 +1580,13 @@ app.post('/chapters/:id/generate/stream', async (c) => {
           generateArgs,
           onProgress: (status) => notify?.({ phase: 'review', status }),
         })
-        logTaskWarn('Novel', 'generate-stream-post-process-done', {
+        const hardReject = post.hard_reject === true
+        logTaskSuccess('Novel', 'generate-chapter-stream', {
           chapterId: id,
-          chars: [...(post.content || '')].length,
+          len: hardReject ? 0 : (post.content || '').length,
+          checkScore: post.check?.score,
+          checkPassed: post.check?.passed,
+          hardReject,
         })
         return {
           content: post.content,
@@ -1578,7 +1596,7 @@ app.post('/chapters/:id/generate/stream', async (c) => {
           outline_compliance: post.outline_compliance,
           ai_detection: post.ai_detection,
           chapter_review: post.chapter_review,
-          hard_reject: post.hard_reject === true,
+          hard_reject: hardReject,
         }
       } catch (err: any) {
         logTaskWarn('Novel', 'generate-stream-post-process-fail', {
@@ -1641,11 +1659,12 @@ app.post('/chapters/:id/generate/stream', async (c) => {
             await episodesRepo.updateEpisode(id, { metadata: cleared, updatedAt: now() })
           } catch { /* ignore */ }
         }
-        logTaskWarn('Novel', 'generate-stream-post-process-degraded', {
+        logTaskSuccess('Novel', 'generate-chapter-stream', {
           chapterId: id,
-          chars: [...body].length,
-          hasAiDetection: !!ai_detection,
-          hasReview: !!chapter_review,
+          len: body.length,
+          checkScore: continuity_check?.score,
+          checkPassed: continuity_check?.passed,
+          degraded: true,
         })
         return {
           content: body,

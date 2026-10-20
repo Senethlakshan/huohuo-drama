@@ -17,6 +17,10 @@ import {
   type OutlineComplianceReason,
 } from './novel-outline-compliance.js'
 import { auditOutlineBoundaryWithModel } from './novel-outline-boundary-audit.js'
+import {
+  applyInfoDeltaModelToReasons,
+  auditInfoDeltaWithModel,
+} from './novel-outline-info-delta-audit.js'
 import { isUsableNovelCreativeOutput } from '../../common/novel/novel-creative-output.js'
 import {
   alignNovelChapterOutlineBoundary,
@@ -181,7 +185,8 @@ async function patchInfoDeltaMissingOnce(args: {
     locked.length
       ? `4. 本章结果态条已锁定钱数必须用字面：${locked.join('、')}——禁止另造`
       : '4. 本章信息增量无锁定钱数时，勿无故改写他章已立金额',
-    '5. 只输出完整正文，无解释',
+    '5. 若缺失要点语义是「介绍/交代一套设定」：须场面化写出该设定自身的结构（分档/规则/范围），禁止只用个别标签或角色当前状态冒充介绍',
+    '6. 只输出完整正文，无解释',
     buildInfoDeltaMustLandBlock(delta, locked),
     '【本轮缺失要点】',
     ...missing.map((p, i) => `${i + 1}. ${p}`),
@@ -497,12 +502,33 @@ export async function maybeFixOutlineCompliance(args: {
       chapterNumber,
       billing,
     })
-    if (!modelReasons.length) return local
     const merged = [...local.reasons]
     for (const r of modelReasons) {
       if (!merged.some(x => x.message === r.message)) merged.push(r)
     }
-    return { ok: false, reasons: merged }
+
+    // 【信息增量】终审：字面缺失仅作候选；语义模型覆盖 / 失败则不硬拒
+    if (merged.some(r => r.code === 'info_delta_missing') && chapterOutline?.trim()) {
+      onProgress?.('信息增量语义审')
+      const lexicalMissing = splitInfoDeltaPointsForCover(extractOutlineInfoDelta(chapterOutline))
+        .filter(p => !infoDeltaPointCovered(text, p, {
+          amountContexts: [chapterOutline || '', amountContext || ''],
+        }))
+      const infoAudit = await auditInfoDeltaWithModel({
+        content: text,
+        chapterOutline,
+        lexicalMissing,
+        chapterNumber,
+        billing,
+      })
+      const applied = applyInfoDeltaModelToReasons(merged, infoAudit)
+      return {
+        ok: applied.reasons.length === 0,
+        reasons: applied.reasons,
+      }
+    }
+
+    return { ok: merged.length === 0, reasons: merged }
   }
 
   const scoreOf = (text: string, briefForScore?: string) => scoreOutlineCandidate({
@@ -762,7 +788,8 @@ export async function maybeFixOutlineCompliance(args: {
           ok: patchCheck.ok,
           codes: patchCheck.reasons.map(r => r.code),
           chars: countNovelChars(patched),
-          covered: outlineInfoDeltaCovered(patched, chapterOutline, amountContext),
+          lexicalCovered: outlineInfoDeltaCovered(patched, chapterOutline, amountContext),
+          stillInfoDelta: patchCheck.reasons.some(r => r.code === 'info_delta_missing'),
         })
         if (patchCheck.ok) {
           return {
@@ -1091,13 +1118,15 @@ export async function maybeFixOutlineCompliance(args: {
       billing,
       novelGenreSkillKey,
     })
-    if (lastPatch && outlineInfoDeltaCovered(lastPatch, chapterOutline, amountContext)) {
+    // 末轮专修后走 detect（含信息增量语义审），不以字面 outlineInfoDeltaCovered 终审
+    if (lastPatch) {
       const after = await detect(lastPatch, fixBrief)
       logTaskWarn('Novel', 'outline-compliance-info-delta-patch-final', {
         chapterNumber,
         ok: after.ok,
         codes: after.reasons.map(r => r.code),
         chars: countNovelChars(lastPatch),
+        lexicalCovered: outlineInfoDeltaCovered(lastPatch, chapterOutline, amountContext),
       })
       if (after.ok || !after.reasons.some(r => r.code === 'info_delta_missing')) {
         return {

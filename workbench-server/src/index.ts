@@ -1,6 +1,15 @@
 import './load-env.js'
+import {
+  defaultTaskLogWriter,
+  installConsoleFileMirror,
+  resolveTaskLogRetentionDays,
+} from './common/task/task-log-writer.js'
+import { logTaskSuccess } from './common/task/task-logger.js'
 import { configureFfmpegPaths } from './common/media/ffmpeg-path.js'
 import './db/bootstrap.js'
+
+// 全站 console → 按日日志（HTTP / 启动 / 业务）；须尽早安装
+installConsoleFileMirror()
 
 configureFfmpegPaths()
 import { serve } from '@hono/node-server'
@@ -45,7 +54,6 @@ import { recoverStaleBatchJobs, resumePendingBatchJobs } from './services/batch/
 import { requireAuth } from './middleware/auth.js'
 import { apiRobotsNoIndex } from './middleware/seo.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '../..')
 
@@ -148,4 +156,11 @@ if (distPath) {
 const port = Number(process.env.PORT || 18555)
 void recoverStaleBatchJobs().then(() => resumePendingBatchJobs())
 console.log(`🚀 火火短剧 后端已启动 http://localhost:${port}`)
+logTaskSuccess('Server', 'listen', {
+  port,
+  db_driver: process.env.DB_DRIVER || 'sqlite',
+  log_file: defaultTaskLogWriter.currentLogPath(),
+  log_retention_days: resolveTaskLogRetentionDays(),
+  console_mirror: process.env.SERVER_LOG_CONSOLE_MIRROR !== '0',
+})
 serve({ fetch: httpApp.fetch, port })

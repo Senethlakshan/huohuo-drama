@@ -3,8 +3,10 @@
  */
 import {
   parseAgeToken,
+  parseGenderPronounFromBlurb,
   extractStableCastFactsFromOutline,
   detectStableAgeConflicts,
+  detectStableGenderConflicts,
   formatStableCastFactsInjectBlock,
   shouldInjectStableCastFacts,
   maybeFormatStableCastFactsInjectBlock,
@@ -20,11 +22,26 @@ const outline = `
 【主要人物】
 - **秦卫国**：男主，20岁，重生者，前特种兵王。
 - **苏婉**：女主，19岁，资本家大小姐，下放劳动改造人员。
+- 林砚｜男｜他｜内门弟子｜宿敌｜夺机缘
 `
 
-// 点名出场但大纲不需要年龄 → 不注入
-if (maybeFormatStableCastFactsInjectBlock(outline, '【本章人物】秦卫国、苏婉\n进山设套')) {
-  throw new Error('named cast without age-need must NOT inject')
+{
+  const gp = parseGenderPronounFromBlurb('男｜他｜内门弟子')
+  if (gp.gender !== 'male' || gp.pronoun !== '他') throw new Error(`parse gender pipe: ${JSON.stringify(gp)}`)
+  const gp2 = parseGenderPronounFromBlurb('女主，19岁')
+  if (gp2.gender !== 'female' || gp2.pronoun !== '她') throw new Error(`parse 女主: ${JSON.stringify(gp2)}`)
+}
+
+// 点名出场但大纲不需要年龄 → 仍注入性别锁（不含年龄亦可）
+{
+  const g = maybeFormatStableCastFactsInjectBlock(outline, '【本章人物】秦卫国、苏婉\n进山设套')
+  if (!g || !/秦卫国/.test(g) || !/苏婉/.test(g)) {
+    throw new Error(`gender lock must inject even without age-need: ${g}`)
+  }
+  // 结构化「｜20岁」不得出现；blurb 里顺带「20岁」可保留
+  if (/｜20岁(?:｜|$)/.test(g) || /｜19岁(?:｜|$)/.test(g)) {
+    throw new Error(`age field must NOT inject without age-need: ${g}`)
+  }
 }
 if (detectNeededStableDimsFromChapterOutline('刘干事上门试探周旋').size) {
   throw new Error('mere 试探/周旋 must NOT need age inject')
@@ -71,6 +88,27 @@ if (!maybeFormatStableCastFactsInjectBlock(outline, '配合登记报年龄')) {
 const facts = extractStableCastFactsFromOutline(outline)
 if (!facts.some(f => f.name === '苏婉' && f.ageYears === 19)) {
   throw new Error(`missing 苏婉19: ${JSON.stringify(facts)}`)
+}
+if (!facts.some(f => f.name === '林砚' && f.gender === 'male' && f.pronoun === '他')) {
+  throw new Error(`missing 林砚男/他: ${JSON.stringify(facts)}`)
+}
+if (!facts.some(f => f.name === '苏婉' && f.gender === 'female' && f.pronoun === '她')) {
+  throw new Error(`苏婉须推女/她: ${JSON.stringify(facts)}`)
+}
+
+// 无盘查时仍应注入性别锁
+const genderOnly = maybeFormatStableCastFactsInjectBlock(outline, '【本章人物】林砚、周衡\n浅滩对峙')
+if (!genderOnly || !/林砚/.test(genderOnly) || !/他/.test(genderOnly)) {
+  throw new Error(`gender must always inject: ${genderOnly}`)
+}
+
+const genderFlip = '林砚立在浅滩口，青衫下摆干爽。她没看他藏在哪，目光钉在凹壁方向。'
+if (!detectStableGenderConflicts(genderFlip, facts).some(h => /林砚/.test(h.message))) {
+  throw new Error('林砚她没… must hard-fail gender')
+}
+const genderOk = '林砚立在浅滩口。他没看周衡藏在哪，目光钉在凹壁方向。'
+if (detectStableGenderConflicts(genderOk, facts).length) {
+  throw new Error('林砚他没… must pass')
 }
 
 const block = formatStableCastFactsInjectBlock(facts)

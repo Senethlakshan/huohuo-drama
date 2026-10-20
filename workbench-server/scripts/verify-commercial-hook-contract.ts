@@ -55,19 +55,28 @@ mustInclude('HINT', NOVEL_OUTLINE_STRUCTURE_HINT, [
   '开篇对峙拍',
   '卖点首屏',
   '同辈字辈一致',
+  '性别与代词必填',
+  '姓名须按本书',
+  '禁止复用',
   '时代背景',
   '禁止',
   '筑基',
   '2026-08-16-v3-ssot',
   '动作震慑',
 ])
+// 人名示例会锚定模型 → 结构提示不得再出现具体示范姓名
+for (const banned of ['张三', '李四', '王五', '赵德贵', '王德福', '秦卫国', '苏婉', '签到百兵', '黑风岭']) {
+  if (NOVEL_OUTLINE_STRUCTURE_HINT.includes(banned)) {
+    throw new Error(`HINT must not anchor concrete name/title: ${banned}`)
+  }
+}
 mustInclude('prose', WEBNOVEL_CHAPTER_PROSE_GUIDE, [
   EMOTION_CORE_CONTRACT_VERSION,
   '动作震慑',
   '本事露尖',
   '拢共天数',
 ])
-mustInclude('outline agent', NOVEL_DEFAULT_PROMPTS.novel_outline.instructions, ['吸引力', '冲突切口', '人物定名', '字辈'])
+mustInclude('outline agent', NOVEL_DEFAULT_PROMPTS.novel_outline.instructions, ['吸引力', '冲突切口', '人物定名', '字辈', '性别', '代词', '自拟'])
 {
   const block = buildAppealSingleCodeFixBlock({
     hardFails: [
@@ -213,7 +222,7 @@ const outlineSkill = readFileSync(
   join(process.cwd(), '../agent-skills/novel_outline/SKILL.md'),
   'utf8',
 )
-mustInclude('outline skill', outlineSkill, ['人物定名', '无名称谓', '施压', '字辈'])
+mustInclude('outline skill', outlineSkill, ['人物定名', '无名称谓', '施压', '字辈', '性别', '代词'])
 const hooksSkill = readFileSync(
   join(process.cwd(), '../agent-skills/novel_outline/chapter_hooks/SKILL.md'),
   'utf8',
@@ -241,12 +250,12 @@ const drama = buildChapterOutlineDramaPromptBlock({
   infoDelta: '卖点',
   themeEcho: '尊严',
 })
-mustInclude('drama block', drama, ['冲突可见', '未决事件', '卖点'])
-mustInclude('priority', OUTLINE_DRAMA_PRIORITY_LINE, ['恨→爽→急→盼', '开篇压力', '章末未决', '第三版三刀', EMOTION_CORE_CONTRACT_VERSION])
+mustInclude('drama block', drama, ['信息增量', '章末问题', '卖点'])
+mustInclude('priority', OUTLINE_DRAMA_PRIORITY_LINE, ['恨→爽→急→盼', '结构化戏剧标签', '信息增量', '章末问题', EMOTION_CORE_CONTRACT_VERSION])
 
 // Task3: beat rules
 mustInclude('open ch1', buildBeatOpeningRule({ chapterNumber: 1 }), ['压力方', '卖点', '冻醒', '恨', '冲突前置'])
-mustInclude('open ch2', buildBeatOpeningRule({ chapterNumber: 2 }), ['承接', '爆发', '冲突'])
+mustInclude('open ch2', buildBeatOpeningRule({ chapterNumber: 2 }), ['状态相容', '爆发', '冲突'])
 mustInclude('end', buildBeatEndingRule({ hasNextHead: false }), ['章末问题', '未决', '感慨'])
 
 // Task4: brief meta ≠ pacing template abuse

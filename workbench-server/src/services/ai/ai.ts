@@ -1372,7 +1372,21 @@ async function chatCompletionTextOnce(
     })
     throw new Error(describeEmptyCompletion(data, cfg.model, maxTokens, cfg))
   }
-  return { text: text.trim(), data }
+  const out = text.trim()
+  // 与 prompt 对称：审校 JSON / 写作用途均落盘回复（可用 NOVEL_LOG_PROMPTS=0 关闭）
+  if (process.env.NOVEL_LOG_PROMPTS !== '0') {
+    const reason = options.billing?.reason || ''
+    const max = salvageMode === 'json' ? 12000 : 4000
+    const body = out.length > max ? `${out.slice(0, max)}\n…[truncated ${out.length - max} chars]` : out
+    console.log(
+      `[AI] chat-completion-response | model=${options.model || cfg.model} reason=${reason}`
+        + ` finish=${finishReason || '∅'} chars=${out.length}`
+        + ` promptTokens=${data?.usage?.prompt_tokens ?? '∅'}`
+        + ` completionTokens=${data?.usage?.completion_tokens ?? '∅'}`,
+    )
+    console.log(`---------- assistant (${out.length} chars) ----------\n${body}\n`)
+  }
+  return { text: out, data }
 }
 
 async function chatCompletionWithConfig(

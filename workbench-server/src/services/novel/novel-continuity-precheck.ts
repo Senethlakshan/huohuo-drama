@@ -18,6 +18,7 @@ import { detectChapterSeamReplay } from './novel-chapter-seam.js'
 import { detectIntraCastPresenceFail } from './novel-presence-phase.js'
 import {
   detectStableAgeConflicts,
+  detectStableGenderConflicts,
   extractStableCastFactsFromOutline,
 } from './novel-stable-cast-facts.js'
 import { detectPeerKinshipAddressConflicts } from '../../common/novel/novel-peer-kinship-audit.js'
@@ -602,6 +603,7 @@ export function runLocalContinuityAudit(args: {
     [args.bookOutline || '', chapterOutline || '', args.extraGrounding || ''].join('\n'),
   )
   const ageHits = detectStableAgeConflicts(trimmed, ageFacts)
+  const genderHits = detectStableGenderConflicts(trimmed, ageFacts)
   const kinshipHits = detectPeerKinshipAddressConflicts(trimmed)
   const titleNameHits = detectReferentNameBindingConflicts(
     args.prevChapterBody,
@@ -613,6 +615,7 @@ export function runLocalContinuityAudit(args: {
     ...checkUnpromptedPregnancyState(trimmed, grounding),
     ...(presenceHit ? [presenceHit] : []),
     ...ageHits,
+    ...genderHits,
     ...kinshipHits,
     ...titleNameHits,
   ]

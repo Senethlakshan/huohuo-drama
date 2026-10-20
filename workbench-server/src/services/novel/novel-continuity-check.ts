@@ -3,7 +3,7 @@
  */
 import { chatCompletionTextAudit, extractAuditJsonFromText, type TextBillingContext } from '../ai/ai.js'
 import { hashNovelContent } from '../ai/ai-text-detection.js'
-import { logTaskWarn } from '../../common/task/task-logger.js'
+import { logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../../common/task/task-logger.js'
 import {
   formatContinuityBlockingItem,
   formatContinuityRuleHint,
@@ -578,6 +578,35 @@ function mergeCheckResult(args: {
   }
 }
 
+function logContinuityCheckResult(
+  result: ContinuityCheckResult,
+  meta: { chapterNumber: number; dramaId: number; chars: number },
+) {
+  const hard = result.audit?.hard?.length ?? 0
+  const rule = result.audit?.rule?.length ?? 0
+  const model = result.audit?.model?.length ?? 0
+  const failDims = (result.dimensions ?? []).filter(d => d.status === 'fail').length
+  const payload = {
+    chapterNumber: meta.chapterNumber,
+    dramaId: meta.dramaId,
+    chars: meta.chars,
+    score: result.score,
+    passed: result.passed,
+    hard,
+    rule,
+    model,
+    failDims,
+    conflicts: result.conflicts?.length ?? 0,
+    summary: (result.reason || result.summary || '').replace(/\s+/g, ' ').slice(0, 160),
+    modelParseFailed: result.model_parse_failed === true,
+  }
+  if (result.passed) {
+    logTaskSuccess('Novel', 'continuity-check', payload)
+  } else {
+    logTaskWarn('Novel', 'continuity-check', payload)
+  }
+}
+
 export async function checkNovelChapterContinuity(args: {
   content: string
   chapterNumber: number
@@ -594,6 +623,16 @@ export async function checkNovelChapterContinuity(args: {
   const trimmed = content.trim()
   const contentHash = hashNovelContent(trimmed)
   const checkedAt = new Date().toISOString()
+  const chars = [...trimmed.replace(/\s+/g, '')].length
+  const causalEnabled = isCausalChainEnabled(meta)
+
+  logTaskStart('Novel', 'continuity-check', {
+    chapterNumber,
+    dramaId,
+    chars,
+    causal: causalEnabled,
+    reason: billing?.reason || '',
+  })
 
   if (!trimmed) {
     const emptyItem: ContinuityBlockingItem = {
@@ -602,7 +641,7 @@ export async function checkNovelChapterContinuity(args: {
       label: continuityRuleLabel('empty_content'),
       message: '正文为空',
     }
-    return {
+    const emptyResult: ContinuityCheckResult = {
       passed: false,
       score: 0,
       conflicts: [formatContinuityBlockingItem(emptyItem)],
@@ -611,6 +650,8 @@ export async function checkNovelChapterContinuity(args: {
       checked_at: checkedAt,
       content_hash: contentHash,
     }
+    logContinuityCheckResult(emptyResult, { chapterNumber, dramaId, chars: 0 })
+    return emptyResult
   }
 
   const fields = expectedState ?? await resolveExpectedContinuityFields(dramaId, chapterNumber)
@@ -658,7 +699,6 @@ export async function checkNovelChapterContinuity(args: {
     })
   }
 
-  const causalEnabled = isCausalChainEnabled(meta)
   const canonBlock = await buildSerialWrittenContextBlock(dramaId, chapterNumber, {
     skipLedger: causalEnabled,
   })
@@ -705,6 +745,13 @@ export async function checkNovelChapterContinuity(args: {
       placeContinuity: seamVerdict?.place_continuity ?? null,
     })
   }
+
+  logTaskProgress('Novel', 'continuity-check-local', {
+    chapterNumber,
+    hard: local.hard.length,
+    rule: local.rule.length,
+    seam: seamVerdict?.verdict ?? 'n/a',
+  })
 
   // 因果模式未走 runLocalContinuityAudit，补拦「无铺垫怀孕」等重大生理状态发明 + 稳定年龄
   if (causalEnabled) {
@@ -827,7 +874,7 @@ export async function checkNovelChapterContinuity(args: {
     parsed = null
   }
 
-  return mergeCheckResult({
+  const result = mergeCheckResult({
     parsed,
     local,
     content: trimmed,
@@ -840,6 +887,8 @@ export async function checkNovelChapterContinuity(args: {
     llmError,
     rawUnparsed,
   })
+  logContinuityCheckResult(result, { chapterNumber, dramaId, chars })
+  return result
 }
 
 /** 修正计划 — 与审校三层 audit 对齐 */
